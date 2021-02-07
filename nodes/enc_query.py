@@ -14,9 +14,10 @@ group.add_argument('-f', '--file',
 group.add_argument('-d','--directory',
                     action = 'store',
                     help = 'Directory of ENC files to survey.')
-parser.add_argument('-l','--layer',
-                    action='store',
-                    help = 'Layer to Extract, or "all" for all of them.')
+parser.add_argument('-l','--layers',
+                    nargs='+',
+                    type = str,
+                    help = 'Layers to query. "all" for all layers. --layer boylat wrecks') 
 parser.add_argument('-v','--verbose',
                     action = 'count',
                     help = 'Verbose output, -vvv = more output')
@@ -27,50 +28,35 @@ parser.add_argument('-p','--position',
 parser.add_argument('-a','--azimuth',
                     action='store',
                     help = 'Degrees from due north')
-parser.add_argument('-m','--meters ',
+parser.add_argument('-m','--meters',
                     action='store',
                     help = 'distance in meters')
 
 class enc_query:
-    """ Playing ENC files """
+    """ Playing with ENC files """
     def __init__(self, ENC_filename):
         self.ENC_filename = ENC_filename
-        # self.ds = ogr.Open(self.ENC_filename)
-        self.layerName = 'all'
+        self.ds = ogr.Open(self.ENC_filename)
+        self.layers = ['all']
         self.verbose = 0
-        self.longlat = (0,0)
+        self.longlat = (0,0)#(-70.855229, 43.122453)
         self.azimuth = 0
-        self.distance = 10
-    def calculateFOV(self):
-    # periods signify points
-    #          .
-    #    .     |     .
-    #     \    |10m /
-    #      \   |   /
-    # 10m   \  |  /  10m
-    #        \ | /
-    #         \|/
-    #          o
+        self.distance = 1000
+        self.view_angle = 40
+        self.fov = None
 
-        fovCoords = ogr.Geometry(ogr.wkbLinearRing)
-        long, lat = self.longlat
-        lDeg = self.azimuth - 5
-        rDeg = self.azimuth + 5
-        lPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(lDeg),self.distance)
-        mPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(self.azimuth),self.distance)
-        rPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(rDeg),self.distance)
-        fovCoords.AddPoint(long, lat)
-        fovCoords.AddPoint(math.degrees(lPoint[0]),math.degrees(lPoint[1]))
-        fovCoords.AddPoint(math.degrees(mPoint[0]),math.degrees(mPoint[1]))
-        fovCoords.AddPoint(math.degrees(rPoint[0]),math.degrees(rPoint[1]))
-        fov = ogr.Geometry(ogr.wkbPolygon)
-        fov.AddGeometry(fovCoords)
+    def getBouyLat(self):
+       
+        layer = self.ds.GetLayer("BOYLAT")
+        coords = []
+        for i in range(layer.GetFeatureCount()):
+            feat = layer.GetNextFeature()
+            geom = feat.GetGeometryRef()
+            coords.append((feat.GetFieldAsString('OBJNAM'), (geom.GetPoint()[1], geom.GetPoint()[0])))
+            print((feat.GetFieldAsString('OBJNAM'), (geom.GetPoint()[1], geom.GetPoint()[0])))
+        return coords
 
-        return fov
-        
-    def run(self):
-        ds = ogr.Open(self.ENC_filename)
-        numLayers = ds.GetLayerCount()
+    def tempFOV(self):
         boxCoords = ogr.Geometry(ogr.wkbLinearRing)
         boxCoords.AddPoint(-70.863,43.123)
         boxCoords.AddPoint(-70.855,43.123)
@@ -80,32 +66,113 @@ class enc_query:
 
         box = ogr.Geometry(ogr.wkbPolygon)
         box.AddGeometry(boxCoords)
+        return box
+    def calculateFOV(self):
+    #          .
+    #    .     |     .
+    #     \    |10m /
+    #      \   |   /
+    # 10m   \  |  /  10m
+    #        \ | /
+    #         \|/ View angle = 40
+    #          o boat
+        #Define geometry
+        fovCoords = ogr.Geometry(ogr.wkbLinearRing)
+        long, lat = self.longlat
 
-        if verbose >=2:
-            print("Found %d Layers" % numLayers)
-        # if(layerName)
-        for i in range(numLayers):
-            layer = ds.GetLayerByIndex(i)
-            try:
-                desc = layer.GetDescription()
-                # print(desc)
-                numFeatures = layer.GetFeatureCount()
-                # print(numFeatures)
-                if verbose >= 2:
-                    print("Found %d features in layer %s" % (numFeatures,desc))
-                for i in range(numFeatures):
-                    feat = layer.GetNextFeature()
-                    if feat is not None and box.Contains(feat.GetGeometryRef()):
-                        if feat.GetFieldAsString('OBJNAM') is not None:
-                            print("-----Feature %d : %s FID : %s"  % (i,feat.GetFieldAsString('OBJNAM'),str(feat.GetFID())))
-                        else:        
-                            print("-----FID : %s" % str(feat.GetFID()) )
+        #Angles for direction of 
+        lDeg = self.azimuth - (self.view_angle/2)
+        rDeg = self.azimuth + (self.view_angle/2)
 
+        #Calculate points of geometry
+        lPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(lDeg),self.distance)
+        mPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(self.azimuth),self.distance)
+        rPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(rDeg),self.distance)
 
-            except:
-                print("Error on layer %d" % i)
+        #Add points to geometry
+        fovCoords.AddPoint(long, lat)
+        fovCoords.AddPoint(math.degrees(lPoint[0]),math.degrees(lPoint[1]))
+        fovCoords.AddPoint(math.degrees(mPoint[0]),math.degrees(mPoint[1]))
+        fovCoords.AddPoint(math.degrees(rPoint[0]),math.degrees(rPoint[1]))
+
+        #Create Polygon
+        fov = ogr.Geometry(ogr.wkbPolygon)
+        fov.AddGeometry(fovCoords)
+
+        return fov
+    def verbosePrint(self, message, count=1):
+        if self.verbose>=count:
+            print(message)
+    def queryFeatures(self,layer):
+        self.verbosePrint("Querying features...")
+        desc = layer.GetDescription()
+        numFeats = layer.GetFeatureCount()
+        self.verbosePrint('Layer: ' + desc)
+        self.verbosePrint('\tNumFeats: ' + str(numFeats))
+        feat = layer.GetNextFeature()
+        for i in range(numFeats):
+            featGeomRef = feat.GetGeometryRef()
             
+            if featGeomRef is not None:
+                if self.fov.Contains(featGeomRef):
+                    if feat.GetFieldIndex('OBJNAM') is not None:
+                        featDesc = feat.GetFieldAsString('OBJNAM')
+                    else:
+                        featDesc = "NO OBJNAM"
+                    fid = feat.GetFID()
+                    self.verbosePrint("Feature IS in range of FOV")
+                    self.verbosePrint("\tFeature: " + str(featDesc))
+                    self.verbosePrint("\t\tFID: " + str(fid))
+                else:
+                    self.verbosePrint("Feature NOT within FOV")
+            else:
+                self.verbosePrint("Feature has no Geom Ref: " + desc + ", " + str(i))
+            feat = layer.GetNextFeature()
+
+        self.verbosePrint("---------------------------")
+    def queryLayers(self):
+        self.verbosePrint("Querying layers...")
+        numLayers = self.ds.GetLayerCount()
+        # boxCoords = ogr.Geometry(ogr.wkbLinearRing)
+        # boxCoords.AddPoint(-70.863,43.123)
+        # boxCoords.AddPoint(-70.855,43.123)
+        # boxCoords.AddPoint(-70.855,43.12)
+        # boxCoords.AddPoint(-70.863,43.12)
+        # boxCoords.AddPoint(-70.863,43.123)
+
+        # box = ogr.Geometry(ogr.wkbPolygon)
+        # box.AddGeometry(boxCoords)
+       
+        if 'all' in self.layers:
+            self.verbosePrint("numLayers: " + str(numLayers))
+            for i in range(numLayers):
+                layer = self.ds.GetLayerByIndex(i)
+                # try:
+                self.queryFeatures(layer)
+                # except:
+                    # print("ERROR on layer %d" % i)
+        else:
+            for layerName in self.layers:
+                try:
+                    layer = self.ds.GetLayer(layerName)
+                    self.queryFeatures(layer)
+                except:
+                    self.verbosePrint("Layer not fount: " + layerName )
+                
+            # print("Layer: %s, NumFeats: %d" % (self.layerName, self.ds.GetLayer(self.layerName).GetFeatureCount()))
+        # # if(layerName)
+        # 
             
+    def run(self):
+        self.verbosePrint("Running...")
+        fov = self.tempFOV()
+        self.fov = fov
+        if self.fov is not None:
+            self.queryLayers()
+        else:
+            self.verbosePrint('FOV is none')
+
+
 
 if __name__ == "__main__":
     enc_files = ['/home/thomas/Downloads/ENC_ROOT/US5NH01M/TestFile/US5NH01M.000']
@@ -118,7 +185,6 @@ if __name__ == "__main__":
         arguments = vars(args)
         for key, value in arguments.iteritems():
             print("\t%s:\t\t%s" % (key,str(value)))
-
 
     if args.file:
         enc_files.append(args.file)
@@ -134,9 +200,10 @@ if __name__ == "__main__":
             print('Input file: %s' % enc)
         obj = enc_query(ENC_filename = enc)
         obj.verbose = verbose 
-        obj.layerName = args.layer
-        obj.longlat = tuple(args.position)
+        if args.layers:
+            obj.layers = args.layers
+        if args.position:
+            obj.longlat = tuple(args.position)
         obj.azimuth = args.azimuth
-        obj.distance = args.distance
-        obj.calculateFOV()
-        # obj.run()
+        obj.distance = args.meters
+        obj.run()        
