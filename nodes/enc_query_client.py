@@ -8,13 +8,13 @@ import argparse
 from enc_query.srv import enc_query_srv
 parser = argparse.ArgumentParser()
 
-group = parser.add_mutually_exclusive_group()
-group.add_argument('-p', '--path',
-                    action='store', 
-                    help= 'ENC file input')
-group.add_argument('-d','--directory',
-                    action = 'store',
-                    help = 'Directory of ENC files to survey.')
+# group = parser.add_mutually_exclusive_group()
+# group.add_argument('-p', '--path',
+#                     action='store', 
+#                     help= 'ENC file input')
+# group.add_argument('-d','--directory',
+#                     action = 'store',
+#                     help = 'Directory of ENC files to survey.')
 parser.add_argument('-l','--layers',
                     nargs='+',
                     type = str,
@@ -38,7 +38,7 @@ parser.add_argument('-v','--view_angle',
 
 
 
-def enc_query_client(path, directory, layers, longitude, latitude, azimuth, distance, view_angle):
+def enc_query_client(layers, longitude, latitude, azimuth, distance, view_angle):
     print("initializing client...")
     rospy.init_node("enc_query_client")
     print("waiting for service")
@@ -46,7 +46,7 @@ def enc_query_client(path, directory, layers, longitude, latitude, azimuth, dist
     print("Done waiting for service...")
     try:
         enc_query = rospy.ServiceProxy('enc_query_node', enc_query_srv)
-        resp1 = enc_query(path, directory, layers, longitude, latitude, azimuth, distance, view_angle)
+        resp1 = enc_query(layers, longitude, latitude, azimuth, distance, view_angle)
         print("Got Response")
         return resp1
     except rospy.ServiceException as e:
@@ -58,16 +58,14 @@ def usage():
 if __name__ == "__main__":
     
     args = parser.parse_args()
-    path = args.path
-    directory = args.directory
     layers = args.layers
-    longitude = args.longitude
-    latitude = args.latitude
-    azimuth = args.azimuth
-    distance = args.distance
-    view_angle = args.view_angle
+    longitude = float(args.longitude)
+    latitude = float(args.latitude)
+    azimuth = float(args.azimuth)
+    distance = int(args.distance)
+    view_angle = int(args.view_angle)
     print("Requesting query...")
-    features = enc_query_client(path, directory, layers, longitude, latitude, azimuth, distance, view_angle)
+    features = enc_query_client(layers, longitude, latitude, azimuth, distance, view_angle)
     print('Response Received...')
     print(features)
     

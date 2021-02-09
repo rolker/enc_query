@@ -11,32 +11,32 @@ import fnmatch
 
 import project11
 
-#parse manager
-parser = argparse.ArgumentParser()
-group = parser.add_mutually_exclusive_group()
-group.add_argument('-f', '--file',
-                    action='store', 
-                    help= 'ENC file input')
-group.add_argument('-d','--directory',
-                    action = 'store',
-                    help = 'Directory of ENC files to survey.')
-parser.add_argument('-l','--layers',
-                    nargs='+',
-                    type = str,
-                    help = 'Layers to query. "all" for all layers. --layer boylat wrecks') 
-parser.add_argument('-v','--verbose',
-                    action = 'count',
-                    help = 'Verbose output, -vvv = more output')
-parser.add_argument('-p','--position',
-                    nargs='+',
-                    type = float,
-                    help = ' Longitude and latitude: -p -70.2 30.4') #long lat may not be the best way to do this because im using points
-parser.add_argument('-a','--azimuth',
-                    action='store',
-                    help = 'Degrees from due north')
-parser.add_argument('-m','--meters',
-                    action='store',
-                    help = 'distance in meters')
+# #parse manager
+# parser = argparse.ArgumentParser()
+# group = parser.add_mutually_exclusive_group()
+# group.add_argument('-f', '--file',
+#                     action='store', 
+#                     help= 'ENC file input')
+# group.add_argument('-d','--directory',
+#                     action = 'store',
+#                     help = 'Directory of ENC files to survey.')
+# parser.add_argument('-l','--layers',
+#                     nargs='+',
+#                     type = str,
+#                     help = 'Layers to query. "all" for all layers. --layer boylat wrecks') 
+# parser.add_argument('-v','--verbose',
+#                     action = 'count',
+#                     help = 'Verbose output, -vvv = more output')
+# parser.add_argument('-p','--position',
+#                     nargs='+',
+#                     type = float,
+#                     help = ' Longitude and latitude: -p -70.2 30.4') #long lat may not be the best way to do this because im using points
+# parser.add_argument('-a','--azimuth',
+#                     action='store',
+#                     help = 'Degrees from due north')
+# parser.add_argument('-m','--meters',
+#                     action='store',
+#                     help = 'distance in meters')
 
 class enc_feature:
     def __init__(self,fid, name = 'NoName'):
@@ -120,7 +120,7 @@ class enc_query:
         fovCoords.AddPoint(math.degrees(lPoint[0]),math.degrees(lPoint[1]))
         fovCoords.AddPoint(math.degrees(mPoint[0]),math.degrees(mPoint[1]))
         fovCoords.AddPoint(math.degrees(rPoint[0]),math.degrees(rPoint[1]))
-
+        fovCoords.AddPoint(long, lat)
         #Create Polygon
         fov = ogr.Geometry(ogr.wkbPolygon)
         fov.AddGeometry(fovCoords)
@@ -218,17 +218,20 @@ class enc_query:
             enc_feature[]: list of features within query fov
         """
         self.verbosePrint("Running...")
-        fov = self.tempFOV()
+        fov = self.calculateFOV()
         self.fov = fov
-        if self.fov is not None:
-            try:
-                response = self.queryLayers()
-                print("RESPONSE:", response)
-                return response
-            except:
-                self.verbosePrint("ERROR IN queryLayers ")
+        if self.fov.IsValid():
+            if self.fov is not None:
+                try:
+                    response = self.queryLayers()
+                    print("RESPONSE:", response)
+                    return response
+                except:
+                    self.verbosePrint("ERROR IN queryLayers ")
+            else:
+                self.verbosePrint('FOV is none')
         else:
-            self.verbosePrint('FOV is none')
+            self.verbosePrint("FOV not valid geometry")
 
 def enc_query_server():
     print("enc_query_server called...")
@@ -242,8 +245,6 @@ def service_handler(req):
     verbose = 1
     featureList = []
     if verbose:
-        print("Path", req.path)
-        print("Directory", req.directory)
         print("Layers", req.layers)
         print("Longitude", req.longitude)
         print("Latitude", req.latitude)
@@ -251,13 +252,7 @@ def service_handler(req):
         print("Distance", req.distance)
         print("View_angle", req.view_angle)
 
-    if req.path:
-        enc_files.append(req.path)
-    if req.directory:
-        directory = req.directory
-        for root, dirnames, filesnames in os.walk(directory):
-            for filename in fnmatch.filter(filesnames, 'US*.000'):
-                enc_files.append(os.path.join(root,filename))
+   
 
     for enc in enc_files:
         if verbose >= 2:
