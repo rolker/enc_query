@@ -1,0 +1,10 @@
+string path
+string directory
+string[] layers
+float32 longitude
+float32 latitude
+float32 azimuth
+int32 distance
+int32 view_angle
+---
+enc_query/enc_feature_msg[] features

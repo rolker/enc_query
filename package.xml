@@ -2,7 +2,7 @@
 <package format="2">
   <name>enc_query</name>
   <version>0.0.0</version>
-  <description>The traffic_sim package</description>
+  <description>The enc_query package</description>
 
   <maintainer email="tsd1009@wildcats.unh.edu">Thomas Donnelly</maintainer>
 
@@ -13,6 +13,9 @@
   <depend>rospy</depend>
   <depend>marine_msgs</depend>
   <depend>project11</depend>
+
+  <build_depend> message_generation</build_depend>
+  <exec_depend> message_runtime</exec_depend>
   <export>
   </export>
 </package>
