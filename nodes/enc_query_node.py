@@ -27,23 +27,21 @@ class enc_feature:
 
 class enc_query:
     """ enc_query class  """
-    def __init__(self, enc_root, xmlFile):
+    def __init__(self, enc_root):
         """ Initialize an enc_query
         Args:
             ENC_filename (string): path into enc_root
         """
         self.enc_root = enc_root
-        self.xmlFile = xmlFile
-        self.enc_filename = None
-        self.ds = None
         self.layers = []
         self.verbose = 0
         self.longitude = 0
         self.latitude = 0
-        self.azimuth = 0
+        self.bearing = 0
         self.distance = 1000
         self.view_angle = 40
         self.fov = None
+        self.enc_geometries = None
 
     def verbosePrint(self, message, count=1):
         """print function for when -v flag is used
@@ -91,12 +89,12 @@ class enc_query:
         lat = self.latitude
 
         #Angles for direction of 
-        lDeg = self.azimuth - (self.view_angle/2)
-        rDeg = self.azimuth + (self.view_angle/2)
+        lDeg = self.bearing - (self.view_angle/2)
+        rDeg = self.bearing + (self.view_angle/2)
 
         #Calculate points of geometry
         lPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(lDeg),self.distance)
-        mPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(self.azimuth),self.distance)
+        mPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(self.bearing),self.distance)
         rPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(rDeg),self.distance)
 
         #Add points to geometry
@@ -110,7 +108,7 @@ class enc_query:
         fov.AddGeometry(fovCoords)
 
         return fov
-    def queryLayers(self):
+    def queryLayers(self, ds):
         """Query through given layers
 
         Returns:
@@ -118,18 +116,18 @@ class enc_query:
         """
         self.verbosePrint("Querying layers...")
 
-        numLayers = self.ds.GetLayerCount()
+        numLayers = ds.GetLayerCount()
         featureList = []
 
         if 'all' in self.layers:
             self.verbosePrint("numLayers: " + str(numLayers))
             for i in range(numLayers):
-                layer = self.ds.GetLayerByIndex(i)
+                layer = ds.GetLayerByIndex(i)
                 featureList += self.queryFeatures(layer)
         else:
             for layerName in self.layers:
                 try:
-                    layer = self.ds.GetLayer(layerName)
+                    layer = ds.GetLayer(layerName)
                     featureList += self.queryFeatures(layer)
                 except:
                     self.verbosePrint("Layer not found: " + layerName )
@@ -182,12 +180,20 @@ class enc_query:
 
         return featureList
 
-    def getEncGeometries(self):
+    def getEncGeometries(self, catalog_location):
+        self.verbosePrint("Getting ENC Geometries")
         #get xml from web
-        resp = requests.get(self.xmlFile).text 
-        root = ET.fromstring(resp) 
+        if(catalog_location[:4].lower() == 'http'):
+            resp = requests.get(catalog_location).text 
+            root = ET.fromstring(resp) 
+        #get xml from local file
+        else:
+            tree = ET.parse(catalog_location)
+            root = tree.getroot()
 
         #define xml namespace variables
+        #This should be derrived from the file but ET does not directly support it, namespaces look to be 
+        #consistant throughout all of the catalogs. Possible solution is to directly parse out from xml text file
         ns = {'d': 'http://www.isotc211.org/2005/gmd', "f":"http://www.opengis.net/gml/3.2"}
 
         #declare return dict
@@ -197,7 +203,7 @@ class enc_query:
         for map in root.findall("./d:composedOf/d:DS_DataSet/d:has/d:MD_Metadata/d:identificationInfo/d:MD_DataIdentification/d:extent/d:EX_Extent/d:geographicElement/d:EX_BoundingPolygon/d:polygon/f:Polygon",ns): 
             #key id of polygon i.e. filename
             key = map.attrib['{http://www.opengis.net/gml/3.2}id']
-            self.verbosePrint(key)
+            self.verbosePrint(key,3)
             
             #declare array for latlong points
             points = []
@@ -207,7 +213,6 @@ class enc_query:
                 lat,long = point.text.split()
                 long = float(long)
                 lat = float(lat)
-                # print(long,lat)
                 points.append([long,lat])
 
             #declare new geometry for bountry
@@ -234,12 +239,11 @@ class enc_query:
     def getENC(self):
         """Get the appropriate enc file based on current position
         """
-        encGeometries = self.getEncGeometries()
         position = ogr.Geometry(ogr.wkbPoint)
         position.SetPoint_2D(0, self.longitude, self.latitude)
         enc_filenames = []
-        for key in encGeometries:
-            if position.Within(encGeometries[key]):
+        for key in self.enc_geometries:
+            if position.Within(self.enc_geometries[key]):
                 self.verbosePrint("Position is within:" + key)
                 enc_filenames.append(key[:-3]) #remove _P1 label to just get filename
         return enc_filenames
@@ -258,60 +262,64 @@ class enc_query:
         if self.fov.IsValid():
             if self.fov is not None:
                 for enc_filename in enc_filenames:
-                    self.ds = ogr.Open(self.enc_root + '/' + enc_filename + '/' + enc_filename + '.000')
-                    self.enc_filename = enc_filename
-                    fileResponse = self.queryLayers()
-                    self.verbosePrint("Response: " + str(fileResponse))
+                    ds = ogr.Open(self.enc_root + '/' + enc_filename + '/' + enc_filename + '.000')
+                    fileResponse = self.queryLayers(ds)
+                    self.verbosePrint(enc_filename+" response: " + str(fileResponse))
                     response += fileResponse
                 return response
             else:
                 self.verbosePrint('FOV is none')
         else:
             self.verbosePrint("FOV not valid geometry")
+    def service_handler(self,req):
+        """Handle incomming requests from ROS service
+
+        Args:
+            req (srv): attributes for enc query
+
+        Returns:
+            list[features]: list of features within FOV
+        """
+    
+        featureList = []
+       
+        self.verbosePrint("Layers", req.layers)
+        self.verbosePrint("Longitude", req.longitude)
+        self.verbosePrint("Latitude", req.latitude)
+        self.verbosePrint("Bearing", req.bearing)
+        self.verbosePrint("Distance", req.distance)
+        self.verbosePrint("View_angle", req.view_angle)
+            
+    
+        if req.layers:
+            self.layers = req.layers
+        else:
+            self.layers = ['all']
+        if req.latitude and req.longitude:
+            self.longitude = req.longitude
+            self.latitude = req.latitude
+        self.bearing = req.bearing
+        self.distance = req.distance
+        featureList = self.run()
+
+        return enc_query_srvResponse(featureList)
 def enc_query_server():
     """Initialize node for ros server
     """
     print("enc_query_server called...")
     rospy.init_node('enc_query_node')
-    s = rospy.Service('enc_query_node', enc_query_srv, service_handler)
+    # enc_root = '/home/thomas/Downloads/ENC_ROOT'
+    enc_root = rospy.get_param('enc_query/enc_root')
+    catalog_location = rospy.get_param('enc_query/catalog_location')
+    # catalog_location = 'https://www.charts.noaa.gov/ENCs/NH_ENCProdCat_19115.xml'
+    verbose = 1
+    obj = enc_query(enc_root)
+    obj.verbose = verbose 
+    obj.enc_geometries = obj.getEncGeometries(catalog_location)
+    s = rospy.Service('enc_query_node', enc_query_srv, obj.service_handler)
     rospy.spin()
 
-def service_handler(req):
-    """Handle incomming requests from ROS service
 
-    Args:
-        req (srv): attributes for enc query
-
-    Returns:
-        list[features]: list of features within FOV
-    """
-    enc_root = '/home/thomas/Downloads/ENC_ROOT'
-    xmlFile = 'https://www.charts.noaa.gov/ENCs/NH_ENCProdCat_19115.xml'
-
-    verbose = 1
-    featureList = []
-    if verbose:
-        print("Layers", req.layers)
-        print("Longitude", req.longitude)
-        print("Latitude", req.latitude)
-        print("Bearing", req.bearing)
-        print("Distance", req.distance)
-        print("View_angle", req.view_angle)
-        
-    obj = enc_query(enc_root, xmlFile)
-    obj.verbose = verbose 
-    if req.layers:
-        obj.layers = req.layers
-    else:
-        obj.layers = ['all']
-    if req.latitude and req.longitude:
-        obj.longitude = req.longitude
-        obj.latitude = req.latitude
-    obj.bearing = req.bearing
-    obj.distance = req.distance
-    featureList = obj.run()
-
-    return enc_query_srvResponse(featureList)
 if __name__ == "__main__":
     enc_query_server()
     # #define the ENC_ROOT directory

@@ -15,6 +15,8 @@ def enc_query_client(layers, longitude, latitude, azimuth, distance, view_angle)
     print("Done waiting for service...")
     try:
         enc_query = rospy.ServiceProxy('enc_query_node', enc_query_srv)
+        # rosparam.set_param('enc_root', '/home/thomas/Downloads/ENC_ROOT')
+        # rosparam.set_param('catalog_location', 'https://www.charts.noaa.gov/ENCs/NH_ENCProdCat_19115.xml')
         resp1 = enc_query(layers, longitude, latitude, azimuth, distance, view_angle)
         print("Got Response")
         return resp1
