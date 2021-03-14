@@ -7,6 +7,8 @@ import rospy
 import argparse
 from enc_query.srv import enc_query_srv
 
+
+
 def enc_query_client(layers, longitude, latitude, azimuth, distance, view_angle):
     print("initializing client...")
     rospy.init_node("enc_query_client")
