@@ -118,13 +118,13 @@ class enc_query:
                     self.verbosePrint("\tFeature: " + str(featDesc))
                     self.verbosePrint("\t\tFID: " + str(fid))
                     # self.verbose('\t\tPoints: ' +)
-                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,True))
+                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid))
                 else:
                     if feat.GetFieldIndex('OBJNAM') is not None:
                         featDesc = feat.GetFieldAsString('OBJNAM')
                     else:
                         featDesc = "NO OBJNAM"
-                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,False))
+                    # featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,False))
 
                     self.verbosePrint("Feature NOT within FOV",2)
             else:
@@ -246,9 +246,7 @@ class enc_query:
             self.layers = ['all']
         self.fovPoly = req.fov
         featureList = self.run()
-        response = enc_query_srvResponse()
-        response.featuresInView = featureList
-        return response
+        return enc_query_srvResponse(featureList)
 def enc_query_server():
     """Initialize node for ros server
     """

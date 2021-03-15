@@ -26,6 +26,7 @@ class FOVQuery():
     distance = 0
     view_angle = 0
     enc_query = None
+
     def __init__(self, distance, view_angle):
         self.distance = distance
         self.view_angle = view_angle
@@ -41,11 +42,6 @@ class FOVQuery():
         self.fovVizItem = GeoVizItem()
         self.fovVizItem.polygons.append(GeoPath())
         self.fovVizItem.id = "FOV" 
-
-        self.featureViz = GeoVizItem()
-        self.featureViz.point_groups = [None]*2
-        
-
         
         try:
             rospy.wait_for_service('enc_query_node')
@@ -57,34 +53,27 @@ class FOVQuery():
        
     def iterate(self,data):
     
-        rospy.loginfo("Running")
-
         #update fov
         self.calculateFOV()
         #update VizItem
         self.fovVizItem.polygons[0] = self.geoPathToGeoVizPoly(self.fovPath)
 
         #send Query
-        enc_ret = self.enc_query(["boylat"],self.fovPath.poses)
+        layers = ["boylat"]
+        enc_ret = self.enc_query(layers,self.fovPath.poses)
         inViewList = GeoVizPointList()
         inViewList.color = ColorRGBA(0,1,0,1)
-        inViewList.size = 30
-        notInViewList = GeoVizPointList()
-        notInViewList.color = ColorRGBA(0,0,1,1)
-        notInViewList.size = 30
-       
+        inViewList.size = 20
+        self.featureViz = GeoVizItem()
+        self.featureViz.point_groups = [None]
         for enc_feat in enc_ret.featuresInView:
             long = enc_feat.longitude
             lat=enc_feat.latitude
-            inFov = enc_feat.inFov
             feat = GeoPoint(lat,long,0)
-            if inFov:
-                inViewList.points.append(feat)
-            else:
-                notInViewList.points.append(feat)
+            inViewList.points.append(feat)
+           
 
         self.featureViz.point_groups[0] = inViewList
-        self.featureViz.point_groups[1] = notInViewList
             
         #pubish updates
         geoVizItem_pub.publish(self.fovVizItem)
