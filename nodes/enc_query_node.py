@@ -4,26 +4,21 @@ import rospy
 import project11
 from enc_query.srv import enc_query_srv, enc_query_srvResponse
 from enc_query.msg import enc_feature_msg
-import math
-import os
+
 from osgeo import ogr
-import argparse
-import fnmatch
+
 import requests
 import xml.etree.ElementTree as ET 
-import traceback
+
+from enc_query.srv import enc_query_srv
 
 #Quick fix for error:
 #   UnicodeEncodeError: 'ascii' codec can't encode characters in position 88013-88015: ordinal not in range(128)
 import sys  
-reload(sys)  
+reload(sys) 
 sys.setdefaultencoding('utf-8')
   
 
-class enc_feature:
-    def __init__(self,fid, name = 'NoName'):
-        self.fid = fid
-        self.name = name
 
 class enc_query:
     """ enc_query class  """
@@ -34,15 +29,10 @@ class enc_query:
         """
         self.enc_root = enc_root
         self.layers = []
-        self.verbose = 0
-        self.longitude = 0
-        self.latitude = 0
-        self.bearing = 0
-        self.distance = 1000
-        self.view_angle = 40
-        self.fov = None
+        self.fovPoly = []
         self.enc_geometries = None
-
+        self.fov = None
+        self.verbose = 5
     def verbosePrint(self, message, count=1):
         """print function for when -v flag is used
 
@@ -53,61 +43,19 @@ class enc_query:
         if self.verbose>=count:
             print(message)
 
-    def tempFOV(self):
-        """temporary field of view for testing
-
-        Returns:
-            pgr.Geometry : fov with Hen island and Eight-Foot rock bouys
-        """
-        boxCoords = ogr.Geometry(ogr.wkbLinearRing)
-        boxCoords.AddPoint(-70.863,43.123)
-        boxCoords.AddPoint(-70.855,43.123)
-        boxCoords.AddPoint(-70.855,43.12)
-        boxCoords.AddPoint(-70.863,43.12)
-        boxCoords.AddPoint(-70.863,43.123)
-        box = ogr.Geometry(ogr.wkbPolygon)
-        box.AddGeometry(boxCoords)
-        return box
-        
-    def calculateFOV(self):
-        """calculate the field of view for the class attributes
-
-        Returns:
-            ogr.Geometry : field of view
-        """
-    #          .
-    #    .     |     .
-    #     \    |10m /
-    #      \   |   /
-    # 10m   \  |  /  10m
-    #        \ | /
-    #         \|/ View angle = 40
-    #          o boat
-        #Define geometry
+    def geoPathToOGRGeometry(self):
+        # Remember to close geometry
         fovCoords = ogr.Geometry(ogr.wkbLinearRing)
-        long = self.longitude
-        lat = self.latitude
+        for geoPose in self.fovPoly:
+            fovCoords.AddPoint(geoPose.position.longitude, geoPose.position.latitude)
+        # close geometry
+        closePoint = self.fovPoly[0]
+        fovCoords.AddPoint(closePoint.position.longitude, closePoint.position.latitude)
 
-        #Angles for direction of 
-        lDeg = self.bearing - (self.view_angle/2)
-        rDeg = self.bearing + (self.view_angle/2)
-
-        #Calculate points of geometry
-        lPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(lDeg),self.distance)
-        mPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(self.bearing),self.distance)
-        rPoint = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(rDeg),self.distance)
-
-        #Add points to geometry
-        fovCoords.AddPoint(long, lat)
-        fovCoords.AddPoint(math.degrees(lPoint[0]),math.degrees(lPoint[1]))
-        fovCoords.AddPoint(math.degrees(mPoint[0]),math.degrees(mPoint[1]))
-        fovCoords.AddPoint(math.degrees(rPoint[0]),math.degrees(rPoint[1]))
-        fovCoords.AddPoint(long, lat)
-        #Create Polygon
         fov = ogr.Geometry(ogr.wkbPolygon)
         fov.AddGeometry(fovCoords)
-
         return fov
+
     def queryLayers(self, ds):
         """Query through given layers
 
@@ -169,9 +117,15 @@ class enc_query:
                     self.verbosePrint("Feature IS in range of FOV",2)
                     self.verbosePrint("\tFeature: " + str(featDesc))
                     self.verbosePrint("\t\tFID: " + str(fid))
-
-                    featureList.append(enc_feature_msg(featDesc,fid))
+                    # self.verbose('\t\tPoints: ' +)
+                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,True))
                 else:
+                    if feat.GetFieldIndex('OBJNAM') is not None:
+                        featDesc = feat.GetFieldAsString('OBJNAM')
+                    else:
+                        featDesc = "NO OBJNAM"
+                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,False))
+
                     self.verbosePrint("Feature NOT within FOV",2)
             else:
                 self.verbosePrint("Feature has no Geom Ref: " + desc + ", " + str(i))
@@ -236,17 +190,17 @@ class enc_query:
             encGeometries[key] = encGeometryPoly
             # self.verbosePrint()
         return encGeometries
+
     def getENC(self):
         """Get the appropriate enc file based on current position
         """
-        position = ogr.Geometry(ogr.wkbPoint)
-        position.SetPoint_2D(0, self.longitude, self.latitude)
         enc_filenames = []
         for key in self.enc_geometries:
-            if position.Within(self.enc_geometries[key]):
+            if not self.fov.Disjoint(self.enc_geometries[key]):
                 self.verbosePrint("Position is within:" + key)
                 enc_filenames.append(key[:-3]) #remove _P1 label to just get filename
         return enc_filenames
+
     def run(self):
         """Get correct ENC file, build FOV, then query
 
@@ -254,10 +208,9 @@ class enc_query:
             enc_feature[]: list of features within query fov
         """
         self.verbosePrint("Running...")
+        self.fov = self.geoPathToOGRGeometry()
         enc_filenames = self.getENC()
-        # exit()
-        fov = self.tempFOV()
-        self.fov = fov
+       
         response = []
         if self.fov.IsValid():
             if self.fov is not None:
@@ -271,6 +224,7 @@ class enc_query:
                 self.verbosePrint('FOV is none')
         else:
             self.verbosePrint("FOV not valid geometry")
+            
     def service_handler(self,req):
         """Handle incomming requests from ROS service
 
@@ -284,34 +238,24 @@ class enc_query:
         featureList = []
        
         self.verbosePrint("Layers", req.layers)
-        self.verbosePrint("Longitude", req.longitude)
-        self.verbosePrint("Latitude", req.latitude)
-        self.verbosePrint("Bearing", req.bearing)
-        self.verbosePrint("Distance", req.distance)
-        self.verbosePrint("View_angle", req.view_angle)
-            
-    
+        self.verbosePrint("FOV", req.fov)
+
         if req.layers:
             self.layers = req.layers
         else:
             self.layers = ['all']
-        if req.latitude and req.longitude:
-            self.longitude = req.longitude
-            self.latitude = req.latitude
-        self.bearing = req.bearing
-        self.distance = req.distance
+        self.fovPoly = req.fov
         featureList = self.run()
-
-        return enc_query_srvResponse(featureList)
+        response = enc_query_srvResponse()
+        response.featuresInView = featureList
+        return response
 def enc_query_server():
     """Initialize node for ros server
     """
     print("enc_query_server called...")
     rospy.init_node('enc_query_node')
-    # enc_root = '/home/thomas/Downloads/ENC_ROOT'
-    enc_root = rospy.get_param('enc_query/enc_root')
-    catalog_location = rospy.get_param('enc_query/catalog_location')
-    # catalog_location = 'https://www.charts.noaa.gov/ENCs/NH_ENCProdCat_19115.xml'
+    enc_root = rospy.get_param('enc_root')
+    catalog_location = rospy.get_param('catalog_location')
     verbose = 1
     obj = enc_query(enc_root)
     obj.verbose = verbose 
@@ -322,26 +266,7 @@ def enc_query_server():
 
 if __name__ == "__main__":
     enc_query_server()
-    # #define the ENC_ROOT directory
-    # enc_root = '/home/thomas/Downloads/ENC_ROOT'
-
-    # #set up enc_query attributes
-    # verbose = 1
-    # layers = ['all']
-    # longitude = -70.863 
-    # latitude = 43.123
-    # bearing = 0
-    # distance = 1000
-
-    # obj = enc_query(enc_root)
-    # obj.verbose = verbose
-    # obj.layers = layers
-    # obj.longitude = longitude
-    # obj.latitude = latitude
-    # obj.bearing = bearing
-    # obj.distance = distance
-    # obj.enc_root = enc_root
-    # obj.run()
+   
 
 
 

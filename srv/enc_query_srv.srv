@@ -1,8 +1,4 @@
 string[] layers
-float32 longitude #Decimal Degrees (DD)
-float32 latitude #Decimal Degrees (DD)
-float32 bearing #Degrees
-float32 distance #meters
-float32 view_angle #degrees
+geographic_msgs/GeoPose[] fov
 ---
-enc_query/enc_feature_msg[] features
+enc_query/enc_feature_msg[] featuresInView

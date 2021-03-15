@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   message_generation
   std_msgs
+  geographic_msgs
 )
 
 catkin_python_setup()
@@ -25,6 +26,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
   std_msgs
+  geographic_msgs
 )
 catkin_package(
   CATKIN_DEPENDS message_runtime
