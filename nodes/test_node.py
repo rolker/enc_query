@@ -16,8 +16,9 @@ class TestPoint():
     def __init__(self):
         global geoVizItem 
         geoPoint = GeoPoint()
-        geoPoint.longitude = -70.71144
-        geoPoint.latitude = 43.07548
+        geoPoint.longitude =  -70.75598
+       
+        geoPoint.latitude =  43.08110
         geoPoint.altitude = 1000
         pointList = GeoVizPointList()
         pointList.points = [geoPoint]
