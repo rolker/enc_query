@@ -1,274 +1,225 @@
 #!/usr/bin/env python
 from __future__ import print_function
-import rospy
-import project11
-from enc_query.srv import enc_query_srv, enc_query_srvResponse
-from enc_query.msg import enc_feature_msg
-
+try:
+    ROS = True
+    import rospy
+    import project11
+    from enc_query.srv import enc_query_srv, enc_query_srvResponse
+    from enc_query.msg import enc_feature_msg
+except ImportError:
+    ROS = False
 from osgeo import ogr
-
-import requests
-import xml.etree.ElementTree as ET 
-
-from enc_query.srv import enc_query_srv
-
-#Quick fix for error:
-#   UnicodeEncodeError: 'ascii' codec can't encode characters in position 88013-88015: ordinal not in range(128)
-import sys  
-reload(sys) 
-sys.setdefaultencoding('utf-8')
-  
-
+from socket import *
+import geopandas as gpd
+import pandas as pd
+import matplotlib.pyplot as plt
+from shapely.geometry import Polygon
+from osgeo import ogr
+import pickle
 
 class enc_query:
-    """ enc_query class  """
-    def __init__(self, enc_root):
-        """ Initialize an enc_query
-        Args:
-            ENC_filename (string): path into enc_root
-        """
-        self.enc_root = enc_root
-        self.layers = []
-        self.fovPoly = []
-        self.enc_geometries = None
-        self.fov = None
-        self.verbose = 5
-    def verbosePrint(self, message, count=1):
-        """print function for when -v flag is used
-
-        Args:
-            message ( string ): message to be printed 
-            count (int, optional): Level of verbosity. Defaults to 1.
-        """
-        if self.verbose>=count:
-            print(message)
-
-    def geoPathToOGRGeometry(self):
-        # Remember to close geometry
-        fovCoords = ogr.Geometry(ogr.wkbLinearRing)
-        for geoPose in self.fovPoly:
-            fovCoords.AddPoint(geoPose.position.longitude, geoPose.position.latitude)
-        # close geometry
-        closePoint = self.fovPoly[0]
-        fovCoords.AddPoint(closePoint.position.longitude, closePoint.position.latitude)
-
-        fov = ogr.Geometry(ogr.wkbPolygon)
-        fov.AddGeometry(fovCoords)
-        return fov
-
-    def queryLayers(self, ds):
-        """Query through given layers
-
-        Returns:
-            enc_feature[]: list of enc_feature type msg
-        """
-        self.verbosePrint("Querying layers...")
-
-        numLayers = ds.GetLayerCount()
-        featureList = []
-
-        if 'all' in self.layers:
-            self.verbosePrint("numLayers: " + str(numLayers))
-            for i in range(numLayers):
-                layer = ds.GetLayerByIndex(i)
-                featureList += self.queryFeatures(layer)
-        else:
-            for layerName in self.layers:
-                try:
-                    layer = ds.GetLayer(layerName)
-                    featureList += self.queryFeatures(layer)
-                except:
-                    self.verbosePrint("Layer not found: " + layerName )
-        # verbosePrint("FEATURELIST:" + str(featureList))
-        return featureList
-
-    def queryFeatures(self,layer):
-        """Querys through specified layer
-
-        Args:
-            layer (org.Layer): Layer to be queried
-
-        Returns:
-            ogr.Feature: List of features within fov 
-        """
-        self.verbosePrint("Querying features...")
-
-        desc = layer.GetDescription()
-        numFeats = layer.GetFeatureCount()
-        featureList = []
-        
-        self.verbosePrint('Layer: ' + desc)
-        self.verbosePrint('\tNumFeats: ' + str(numFeats))
-        print("NUMFEATS: ", numFeats)
-        for i in range(numFeats):
-            feat = layer.GetNextFeature()
-            featGeomRef = feat.GetGeometryRef()
-            fid = feat.GetFID()
-            
-            #Check if feature contains Geometry reference
-            if featGeomRef is not None:
-                #Check if Geometry reference is contained within FOV
-                if self.fov.Contains(featGeomRef):
-                    if feat.GetFieldIndex('OBJNAM') is not None:
-                        featDesc = feat.GetFieldAsString('OBJNAM')
-                    else:
-                        featDesc = "NO OBJNAM"
-
-                    self.verbosePrint("Feature IS in range of FOV",2)
-                    self.verbosePrint("\tFeature: " + str(featDesc))
-                    self.verbosePrint("\t\tFID: " + str(fid))
-                    # self.verbose('\t\tPoints: ' +)
-                    featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid))
-                else:
-                    if feat.GetFieldIndex('OBJNAM') is not None:
-                        featDesc = feat.GetFieldAsString('OBJNAM')
-                    else:
-                        featDesc = "NO OBJNAM"
-                    # featureList.append(enc_feature_msg(featDesc,featGeomRef.GetX(), featGeomRef.GetY(),fid,False))
-
-                    self.verbosePrint("Feature NOT within FOV",2)
-            else:
-                self.verbosePrint("Feature has no Geom Ref: " + desc + ", " + str(i))
-
-        self.verbosePrint("---------------------------")
-
-        return featureList
-
-    def getEncGeometries(self, catalog_location):
-        self.verbosePrint("Getting ENC Geometries")
-        #get xml from web
-        if(catalog_location[:4].lower() == 'http'):
-            resp = requests.get(catalog_location).text 
-            root = ET.fromstring(resp) 
-        #get xml from local file
-        else:
-            tree = ET.parse(catalog_location)
-            root = tree.getroot()
-
-        #define xml namespace variables
-        #This should be derrived from the file but ET does not directly support it, namespaces look to be 
-        #consistant throughout all of the catalogs. Possible solution is to directly parse out from xml text file
-        ns = {'d': 'http://www.isotc211.org/2005/gmd', "f":"http://www.opengis.net/gml/3.2"}
-
-        #declare return dict
-        encGeometries = {}
-
-        #search though xml
-        for map in root.findall("./d:composedOf/d:DS_DataSet/d:has/d:MD_Metadata/d:identificationInfo/d:MD_DataIdentification/d:extent/d:EX_Extent/d:geographicElement/d:EX_BoundingPolygon/d:polygon/f:Polygon",ns): 
-            #key id of polygon i.e. filename
-            key = map.attrib['{http://www.opengis.net/gml/3.2}id']
-            self.verbosePrint(key,3)
-            
-            #declare array for latlong points
-            points = []
-            
-            #get latlong positions of each point of polygon 
-            for point in map.findall("./f:exterior/f:LinearRing/f:pos",ns):
-                lat,long = point.text.split()
-                long = float(long)
-                lat = float(lat)
-                points.append([long,lat])
-
-            #declare new geometry for bountry
-            encGeometry = ogr.Geometry(ogr.wkbLinearRing)
-
-            #add all the points
-            for point in points:
-                encGeometry.AddPoint(point[0], point[1])
-            #close the geometry
-            encGeometry.AddPoint(points[0][0], points[0][1])
-            #declare polygon
-            encGeometryPoly = ogr.Geometry(ogr.wkbPolygon)
-
-            #add geometry to polygon
-            encGeometryPoly.AddGeometry(encGeometry) 
-
-            if not encGeometryPoly.IsValid():
-                print("GEOMETRY NOT VALID: ", key )
-                exit()
-
-            encGeometries[key] = encGeometryPoly
-            # self.verbosePrint()
-        return encGeometries
-
-    def getENC(self):
-        """Get the appropriate enc file based on current position
-        """
-        enc_filenames = []
-        for key in self.enc_geometries:
-            if not self.fov.Disjoint(self.enc_geometries[key]):
-                self.verbosePrint("Position is within:" + key)
-                enc_filenames.append(key[:-3]) #remove _P1 label to just get filename
-        return enc_filenames
-
-    def run(self):
-        """Get correct ENC file, build FOV, then query
-
-        Returns:
-            enc_feature[]: list of features within query fov
-        """
-        self.verbosePrint("Running...")
-        self.fov = self.geoPathToOGRGeometry()
-        enc_filenames = self.getENC()
-       
-        response = []
-        if self.fov.IsValid():
-            if self.fov is not None:
-                for enc_filename in enc_filenames:
-                    ds = ogr.Open(self.enc_root + '/' + enc_filename + '/' + enc_filename + '.000')
-                    fileResponse = self.queryLayers(ds)
-                    self.verbosePrint(enc_filename+" response: " + str(fileResponse))
-                    response += fileResponse
-                return response
-            else:
-                self.verbosePrint('FOV is none')
-        else:
-            self.verbosePrint("FOV not valid geometry")
-            
-    def service_handler(self,req):
-        """Handle incomming requests from ROS service
-
-        Args:
-            req (srv): attributes for enc query
-
-        Returns:
-            list[features]: list of features within FOV
-        """
+    """ Class for querying a ENC_ROOT folder of enc maps for features of type point within a input polygon. """
     
-        featureList = []
-       
-        self.verbosePrint("Layers", req.layers)
-        self.verbosePrint("FOV", req.fov)
+    fov = None
+    # layerNames = []
+    featureDataframe = None
+    isROS = False;
+    def __init__(self,enc_root, isROS):
+        self.isROS = isROS
+        self.enc_root = enc_root
+        filenames = ['US2EC03M', 'US2EC04M', 'US3EC10M', 'US3EC11M', 'US4MA04M', 'US4MA19M', 'US4ME01M', 'US5MA1AM', 'US5MA04M', 'US5MA19M', 'US5ME01M', 'US5NH01M', 'US5NH02M']
+        layerNames = ['BCNCAR', 'BCNISD', 'BCNLAT', 'BCNSAW', 'BCNSPP', 'BOYCAR', 'BOYINB', 'BOYISD', 'BOYLAT', 'BOYSAW', 'BOYSPP', 'CGUSTA', 'CTRPNT', 'CURENT', 'DAYMAR', 'DISMAR', 'FOGSIG', 'LIGHTS', 'LITFLT', 'LITVES', 'PILPNT', 'RADRFL', 'RADSTA', 'RDOSTA', 'RETRFL', 'RSCSTA', 'RTPBCN', 'SISTAT', 'SISTAW', 'SOUNDG', 'SPRING', 'TOPMAR', 'UWTROC']
+        # filenames = ["US5NH01M"]
 
-        if req.layers:
-            self.layers = req.layers
+        features = []
+        for filename in filenames:    
+            ds = ogr.Open(self.enc_root + '/' + filename + '/' + filename + '.000')
+            layers = self.getLayersByNames(ds,layerNames)
+            # rospy.loginfo("layers: " + str(layers))
+            features += self.getAllFeatures(layers)
+        # rospy.loginfo("features:"+ str(features))
+        df = pd.DataFrame.from_records(features, columns=['name', 'fid', 'longitude', 'latitude'])
+        self.featureDataframe = gpd.GeoDataFrame(df,geometry=gpd.points_from_xy(df.longitude, df.latitude))
+
+    @classmethod
+    def ROS_Query(cls, enc_root):
+        return cls(enc_root, True)
+    @classmethod
+    def UDP_Query(cls, enc_root):
+        return cls(enc_root, False)
+
+    def getLayers(self,ds):
+        """Get all layers in input dataset
+
+        Args:
+            ds (ogr.DataSource): dataset to query
+
+        Returns:
+            ogr.Layer[]: List of layers 
+        """
+        numLayers = ds.GetLayerCount()
+        layers = []
+        for i in range(numLayers):
+            layers.append(ds.GetLayerByIndex(i))
+        return layers
+
+
+    def getFeatures(self,layer):
+        """Get all the features from the provided layer
+
+        Args:
+            layer (ogr.Layer): layer to pull features from
+
+        Returns:
+            ogr.Feature[]: featuers in layer
+        """     
+        numFeatures = layer.GetFeatureCount()
+        features = []
+        for i in range(numFeatures):
+            feature = layer.GetNextFeature()
+            if feature is not None:
+                geomRef = feature.GetGeometryRef()
+                if((geomRef is not None and geomRef.GetPointCount() != 0)):
+                    features.append(self.getFeatureInfo(feature))
+        return features
+
+
+    def getAllFeatures(self,layers):
+        """Get all features from all input layers 
+
+        Args:
+            layers (ogr.Layer[]): List of layers
+
+        Returns:
+            ogr.Feature[]: List of features with layers
+        """ 
+        features = []
+        for layer in layers:
+            features += self.getFeatures(layer)
+        return features
+
+    def getLayersByNames(self,ds, layerNames):
+        """Get layers from datasource using specific layer names
+
+        Args:
+            ds (ogr.Datasource): datasource to query
+            layerNames (String[]): List of strings
+
+        Returns:
+            ogr.Layer[]: List of layers from datasource
+        """
+        layers = []
+        for layerName in layerNames:
+            layer = ds.GetLayer(layerName)
+            if layer is None:
+                rospy.loginfo("Layer not found: " + layerName )
+            else:
+                layers.append(layer)
+        return layers
+        
+    def getFeatureInfo(self,feature):
+        """Given a feauture, get the featurename, featureID, longitude, and latitude of feature.
+
+        Args:
+            feature (ogr.Feature): feature 
+
+        Returns:
+            tuple: featureName, FID, longitude, latitude
+        """
+        geomRef = feature.GetGeometryRef()
+        nameIndex = feature.GetFieldIndex("OBJNAM")
+        featureName = "NO OBJNAM"
+        if(nameIndex != -1 and feature.GetFieldAsString(nameIndex) != "" ):
+            featureName = feature.GetFieldAsString(nameIndex)
+        featureInfo = (featureName, feature.GetFID(), geomRef.GetX(), geomRef.GetY())
+        # rospy.loginfo(featureInfo)
+        return featureInfo
+
+
+    def geoPathToGPD(self, inFOV):
+        """Take a geoPath message and convert into GeoPandas Dataframe
+
+        Args:
+            inFOV (GeoPath): ros message GeoPath
+
+        Returns:
+            GeoDataFrame: dataframe containing only the polygon in geometry column
+        """ 
+        points = []
+        for geoPose in inFOV:
+            points.append((geoPose.position.longitude, geoPose.position.latitude))
+        poly = Polygon(points)
+        # rospy.logerr("FOVPoly:"+ str(poly))
+        return gpd.GeoDataFrame({'geometry': [poly]})
+
+    def pickleToGPD(self,inFOV):
+        points = pickle.loads(inFOV)
+        poly = Polygon(points)
+        return gpd.GeoDataFrame({'geometry': [poly]})
+
+
+
+    def run(self, req):
+        """Find all features in polygon using GeoPandas sjoin spatial indexing feature.
+
+        Returns:
+            enc_feature_msg: ros feature msg containing feauture  name, longitude, latitude, fid
+        """
+
+        if(self.isROS):
+            featureList = []
+            self.fov = self.geoPathToGPD(req.fov)
         else:
-            self.layers = ['all']
-        self.fovPoly = req.fov
-        featureList = self.run()
-        return enc_query_srvResponse(featureList)
-def enc_query_server():
-    """Initialize node for ros server
+            self.fov = self.pickleToGPD(req)
+
+
+            
+        response = []
+    
+        featuresInView = gpd.sjoin(self.featureDataframe, self.fov, op='within')     
+        for index, feature in featuresInView.iterrows():
+            if(self.isROS):
+                response.append(enc_feature_msg(feature["name"], feature["longitude"],feature["latitude"], feature["fid"]))
+            else:
+                response.append((feature["name"], feature["longitude"],feature["latitude"], feature["fid"]))
+        if(self.isROS):
+            return enc_query_srvResponse(response)
+        return response
+
+    # def service_testing(self):
+    #     featureList = []
+    #     self.fov = Polygon([(-70.855,43.123),(-70.855,43.12),(-70.863,43.12),(-70.863,43.123)])
+    #     featureList = self.run()
+    #     print(featureList)
+    #     # return enc_query_srvResponse(featureList)
+           
+
+def enc_query_server(isROS):
+    """Initialize node for ros server or UDP server
     """
-    print("enc_query_server called...")
-    rospy.init_node('enc_query_node')
-    enc_root = rospy.get_param('enc_root')
-    catalog_location = rospy.get_param('catalog_location')
-    verbose = 1
-    obj = enc_query(enc_root)
-    obj.verbose = verbose 
-    obj.enc_geometries = obj.getEncGeometries(catalog_location)
-    s = rospy.Service('enc_query_node', enc_query_srv, obj.service_handler)
-    rospy.spin()
+    if(isROS):
+        rospy.init_node('enc_query_node')
+        enc_root = rospy.get_param('enc_root')
+        obj = enc_query.ROS_Query(enc_root)
+        s = rospy.Service('enc_query_node', enc_query_srv, obj.run)
+        rospy.spin()
+    else:
+        serverSocket = socket(AF_INET, SOCK_DGRAM)
+        serverSocket.bind(('', 12000))
+        obj = enc_query.UDP_Query("/home/thomas/Downloads/ENC_ROOT")
+
+        # long, lat = -70.855,43.123
+        print("Server running...")
+        while True:
+            fov, address = serverSocket.recvfrom(1024)
+            response = obj.run(fov)
+            print(response)
+            response = pickle.dumps(response)
+            serverSocket.sendto(response,address)
+
 
 
 if __name__ == "__main__":
-    enc_query_server()
-   
-
-
-
-
-
+    ROS = False
+    enc_query_server(ROS)
     
-
