@@ -8,7 +8,11 @@ from geographic_visualization_msgs.msg import GeoVizItem, GeoVizPolygon, GeoVizP
 from geographic_msgs.msg import GeoPose, GeoPointStamped, GeoPath, GeoPoint
 from marine_msgs.msg import NavEulerStamped
 from std_msgs.msg import ColorRGBA
+from nav_msgs.msg import Odometry
 from enc_query.srv import enc_query_srv
+import tf2_ros
+from tf.transformations import euler_from_quaternion
+from tf2_geometry_msgs import do_transform_pose
 
 class FOVQuery:
     distance = 0
@@ -20,6 +24,10 @@ class FOVQuery:
         self.distance = distance
         self.timelog = [0,0]
 
+        self.odometry = None
+        rospy.Subscriber('odom', Odometry, self.odometryCallback, queue_size = 1)
+        self.tfBuffer = tf2_ros.Buffer()
+        self.listener = tf2_ros.TransformListener(self.tfBuffer)
         # init path and add points 
         self.fovPath = GeoPath()
         for i in range(9):
@@ -37,7 +45,8 @@ class FOVQuery:
 
     def iterate(self,data):
         #calculate fov for current position
-        self.calculateFOV()
+        if not self.calculateFOV():
+            return
         
         #update VizItem
         self.fovVizItem.polygons[0] = self.geoPathToGeoVizPoly(self.fovPath)
@@ -75,20 +84,24 @@ class FOVQuery:
         geoVizItem_pub.publish(self.featureViz)
 
     def calculateFOV(self):
-        global asv_heading
-        global asv_position
+        asv_heading_rad = self.heading()
+        asv_position = self.position()
+
+        if asv_heading_rad is None or asv_position is None:
+            return False
         
-        long = asv_position.position.longitude
-        lat = asv_position.position.latitude
+        long = asv_position[1]
+        lat = asv_position[0]
 
         octoPoints = []
-        angle = asv_heading;
+        angle = asv_heading_rad;
         for i in range(9):
-            point = project11.geodesic.direct(math.radians(long),math.radians(lat),math.radians(angle),self.distance)
-            angle = (angle+45)%360
+            point = project11.geodesic.direct(long, lat, angle, self.distance)
+            angle = angle+math.radians(45)
             pose = self.fovPath.poses[i]
             pose.position.longitude = math.degrees(point[0])
             pose.position.latitude = math.degrees(point[1])
+        return True
         
 
     def geoPathToGeoVizPoly(self, path):
@@ -98,25 +111,32 @@ class FOVQuery:
         poly.fill_color = ColorRGBA(1,0,0,.2)
         return poly
 
-def positionCallback(data):
-    global asv_position
-    asv_position = data
-    
+    def odometryCallback(self, msg):
+        self.odometry = msg
 
-def headingCallback(data):
-    global asv_heading
-    asv_heading = data.orientation.heading
+    def position(self):
+      if self.odometry is not None:
+        try:
+          odom_to_earth = self.tfBuffer.lookup_transform("earth", self.odometry.header.frame_id, rospy.Time())
+        except Exception as e:
+          print(e)
+          return
+        ecef = do_transform_pose(self.odometry.pose, odom_to_earth).pose.position
+        return project11.wgs84.fromECEFtoLatLong(ecef.x, ecef.y, ecef.z)
+
+    def heading(self):
+      if self.odometry is not None:
+        o = self.odometry.pose.pose.orientation
+        q = (o.x, o.y, o.z, o.w)
+        return math.radians(90)-euler_from_quaternion(q)[2]
+
         
 if __name__ == "__main__":
     rospy.init_node('fov_query')
-    position_sub = rospy.Subscriber('/position', GeoPointStamped, positionCallback)
-    heading_sub = rospy.Subscriber('/heading', NavEulerStamped, headingCallback)
-    rospy.wait_for_message('/heading',NavEulerStamped)
-    rospy.wait_for_message('/position', GeoPointStamped)
 
-    geoVizItem_pub = rospy.Publisher('/project11/display',GeoVizItem,queue_size = 10)
+    geoVizItem_pub = rospy.Publisher('project11/display',GeoVizItem,queue_size = 10)
 
-    fov_query = FOVQuery(100000)
+    fov_query = FOVQuery(2000)
     rospy.Timer(rospy.Duration.from_sec(.1),fov_query.iterate)
 
     rospy.spin()
