@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 from __future__ import print_function
+import os
+import glob
 try:
     ROS = True
     import rospy
@@ -9,6 +11,7 @@ try:
 except ImportError:
     ROS = False
 from osgeo import ogr
+import glob
 from socket import *
 import geopandas as gpd
 import pandas as pd
@@ -27,19 +30,23 @@ class enc_query:
     def __init__(self,enc_root, isROS):
         self.isROS = isROS
         self.enc_root = enc_root
-        filenames = ['US2EC03M', 'US2EC04M', 'US3EC10M', 'US3EC11M', 'US4MA04M', 'US4MA19M', 'US4ME01M', 'US5MA1AM', 'US5MA04M', 'US5MA19M', 'US5ME01M', 'US5NH01M', 'US5NH02M']
+        filenames = glob.glob(os.path.join(enc_root,'*/*.000'))
+        #filenames = ['US2EC03M', 'US2EC04M', 'US3EC10M', 'US3EC11M', 'US4MA04M', 'US4MA19M', 'US4ME01M', 'US5MA1AM', 'US5MA04M', 'US5MA19M', 'US5ME01M', 'US5NH01M', 'US5NH02M']
         layerNames = ['BCNCAR', 'BCNISD', 'BCNLAT', 'BCNSAW', 'BCNSPP', 'BOYCAR', 'BOYINB', 'BOYISD', 'BOYLAT', 'BOYSAW', 'BOYSPP', 'CGUSTA', 'CTRPNT', 'CURENT', 'DAYMAR', 'DISMAR', 'FOGSIG', 'LIGHTS', 'LITFLT', 'LITVES', 'PILPNT', 'RADRFL', 'RADSTA', 'RDOSTA', 'RETRFL', 'RSCSTA', 'RTPBCN', 'SISTAT', 'SISTAW', 'SOUNDG', 'SPRING', 'TOPMAR', 'UWTROC']
         # filenames = ["US5NH01M"]
 
         features = []
+        rospy.loginfo("Loading " + str(len(filenames)) +' datasets...')
         for filename in filenames:    
-            ds = ogr.Open(self.enc_root + '/' + filename + '/' + filename + '.000')
+            #ds = ogr.Open(self.enc_root + '/' + filename + '/' + filename + '.000')
+            ds = ogr.Open(filename)
             layers = self.getLayersByNames(ds,layerNames)
             # rospy.loginfo("layers: " + str(layers))
             features += self.getAllFeatures(layers)
         # rospy.loginfo("features:"+ str(features))
         df = pd.DataFrame.from_records(features, columns=['name', 'fid', 'longitude', 'latitude'])
         self.featureDataframe = gpd.GeoDataFrame(df,geometry=gpd.points_from_xy(df.longitude, df.latitude))
+        rospy.loginfo("Loading " + str(len(filenames)) +" done.")
 
     @classmethod
     def ROS_Query(cls, enc_root):
@@ -109,12 +116,16 @@ class enc_query:
             ogr.Layer[]: List of layers from datasource
         """
         layers = []
+        not_found = []
         for layerName in layerNames:
             layer = ds.GetLayer(layerName)
             if layer is None:
-                rospy.loginfo("Layer not found: " + layerName )
+                not_found.append(layerName)
+                #rospy.loginfo("Layer not found: " + layerName )
             else:
                 layers.append(layer)
+        if len(not_found):
+            rospy.logdebug("Layers not found in " + ds.GetName() + ": " + str(not_found))
         return layers
         
     def getFeatureInfo(self,feature):
@@ -220,6 +231,6 @@ def enc_query_server(isROS):
 
 
 if __name__ == "__main__":
-    ROS = False
+    ROS = True
     enc_query_server(ROS)
     
