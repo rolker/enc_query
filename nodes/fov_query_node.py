@@ -6,7 +6,7 @@ import time
 import project11
 from geographic_visualization_msgs.msg import GeoVizItem, GeoVizPolygon, GeoVizPointList
 from geographic_msgs.msg import GeoPose, GeoPointStamped, GeoPath, GeoPoint
-from marine_msgs.msg import NavEulerStamped
+from project11_msgs.msg import NavEulerStamped
 from std_msgs.msg import ColorRGBA
 from nav_msgs.msg import Odometry
 from enc_query.srv import enc_query_srv

@@ -3,7 +3,7 @@ project(enc_query)
 
 
 find_package(catkin REQUIRED COMPONENTS
-  marine_msgs
+  project11_msgs
   project11
   rospy
   message_generation
